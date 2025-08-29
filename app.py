@@ -3,96 +3,121 @@ import requests
 import hashlib
 import time
 import os
-from urllib.parse import urlencode
+import re
 
 app = Flask(__name__)
 
-# احصل على هذه من environment variables (أضفها في Render أو .env محليًا)
-APP_KEY = os.environ.get('APP_KEY')  # App Key من AliExpress Developer Console
-APP_SECRET = os.environ.get('APP_SECRET')  # App Secret
+# Environment variables
+APP_KEY = os.environ.get('APP_KEY')
+APP_SECRET = os.environ.get('APP_SECRET')
+TRACKING_ID = os.environ.get('TRACKING_ID')  # Optional, from Affiliate Portal
 
 API_URL = "http://gw.api.taobao.com/router/rest"
 
 def sign_request(params):
-    """توليد التوقيع (sign) باستخدام MD5"""
+    """Generate MD5 signature for AliExpress API"""
     if not APP_SECRET:
-        raise ValueError("APP_SECRET غير معرف")
-    
-    # فرز المعلمات أبجديًا
+        raise ValueError("APP_SECRET is not set")
     sorted_params = sorted(params.items(), key=lambda x: x[0])
     sorted_string = ''.join([f"{k}{v}" for k, v in sorted_params])
-    
-    # إضافة السر قبل وبعد
     bookend_string = APP_SECRET + sorted_string + APP_SECRET
-    
-    # MD5 hash وتحويل إلى uppercase hex
-    sign = hashlib.md5(bookend_string.encode('utf-8')).hexdigest().upper()
-    return sign
+    return hashlib.md5(bookend_string.encode('utf-8')).hexdigest().upper()
+
+def extract_product_id(url):
+    """Extract product_id from AliExpress URL"""
+    # Handles both s.click.aliexpress.com and regular URLs like aliexpress.com/item/123.html
+    try:
+        # First, resolve shortened URLs (s.click.aliexpress.com)
+        response = requests.get(url, allow_redirects=True)
+        final_url = response.url
+        # Extract product_id (e.g., 123 from /item/123.html)
+        match = re.search(r'item/(\d+)\.html', final_url)
+        if match:
+            return match.group(1)
+        return None
+    except Exception as e:
+        return None
 
 @app.route("/")
 def deal():
-    query = request.args.get("query", "wireless earbuds")
+    query = request.args.get("query", "https://s.click.aliexpress.com/e/_EG3MC4q")
     
     if not APP_KEY or not APP_SECRET:
-        return jsonify({"error": "APP_KEY أو APP_SECRET غير معرف"}), 500
+        return jsonify({"error": "APP_KEY or APP_SECRET not set"}), 500
     
-    # المعلمات الأساسية
+    # Extract product_id from URL
+    product_id = extract_product_id(query)
+    if not product_id:
+        return jsonify({"error": "Invalid product URL or unable to extract product_id"}), 400
+    
+    # API parameters for product details
     params = {
-        "method": "aliexpress.affiliate.product.query",  # للبحث بكلمات مفتاحية
+        "method": "aliexpress.affiliate.productdetail.get",
         "app_key": APP_KEY,
         "sign_method": "md5",
-        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()),  # UTC time
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()),
         "format": "json",
         "v": "2.0",
-        "keywords": query,  # الكلمات المفتاحية
-        "page_no": "1",
-        "page_size": "1",  # نأخذ منتج واحد فقط
+        "product_ids": product_id,
         "target_currency": "USD",
-        "target_language": "EN",  # أو AR للعربية إذا دعم
-        # أضف tracking_id إذا كان لديك: "tracking_id": "slotxo24"
+        "target_language": "EN",  # Use AR if Arabic is supported
+        "tracking_id": TRACKING_ID if TRACKING_ID else "",
     }
     
-    # توليد التوقيع وإضافته
-    params["sign"] = sign_request(params)
-    
-    # إرسال الطلب كـ POST (مطلوب لـ API)
+    # Generate signature
     try:
+        params["sign"] = sign_request(params)
         response = requests.post(API_URL, data=params)
         if response.status_code != 200:
             return jsonify({"error": "API unavailable", "status": response.status_code}), response.status_code
         
         data = response.json()
         
-        # التحقق من وجود خطأ في الرد
+        # Check for API errors
         if "error_response" in data:
-            return jsonify({"error": data["error_response"]})
+            return jsonify({"error": data["error_response"]}), 500
         
-        # استخراج النتائج (من resp_result.resp_detail_infos)
-        products = data.get("aliexpress_affiliate_product_query_response", {}).get("resp_result", {}).get("result", {}).get("products", {}).get("product", [])
-        if not products:
-            return jsonify({"error": "No products found"})
+        # Extract product details
+        product_data = data.get("aliexpress_affiliate_productdetail_get_response", {}).get("resp_result", {}).get("result", {}).get("products", {}).get("product", [])
+        if not product_data:
+            return jsonify({"error": "No product found"}), 404
         
-        product = products[0]  # الأول
+        product = product_data[0]
         
-        # استخراج الحقول المطلوبة
+        # Generate affiliate links for different discount types (simulated with tracking_id variations)
+        base_link = product.get("promotion_link", query)
+        discount_links = {
+            "coins": f"{base_link}&type=coins",
+            "superdeals": f"{base_link}&type=superdeals",
+            "limited_offer": f"{base_link}&type=limited",
+            "bigsave": f"{base_link}&type=bigsave",
+            "bundles": f"{base_link}&type=bundles",
+        }
+        
+        # Response formatted as per your initial request
         result = {
-            "title": product.get("subject"),  # عنوان المنتج
-            "price_after_coupon": product.get("discount_price"),  # سعر بعد التخفيض (قد يكون discount_price أو target_sale_price)
-            "promo_code": product.get("promotion_code"),  # كود ترويجي إذا متوفر (قد لا يكون مباشرًا؛ تحقق في الرد)
-            "affiliate_link": product.get("promotion_link")  # رابط الإحالة
+            "message": "🛍️ معلومات عن المنتج مع روابط التخفيضات 🛍️",
+            "note": "⚠️ ملاحظة مهمة: السعر التخفيض بالعملات في بعض الأحيان غير مضبوط، تأكد من السعر النهائي في صفحة الدفع.",
+            "sales_count": product.get("sale_orders", "غير متوفر"),
+            "rating": product.get("average_star", "غير متوفر"),
+            "discount_links": [
+                {"type": "تخفيض بالعملات", "link": discount_links["coins"]},
+                {"type": "عرض سوبر ديل", "link": discount_links["superdeals"]},
+                {"type": "عرض محدود", "link": discount_links["limited_offer"]},
+                {"type": "تخفيض بيج سيف", "link": discount_links["bigsave"]},
+                {"type": "عرض الحزمات", "link": discount_links["bundles"]},
+            ]
         }
         
         return jsonify(result)
     
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": f"Server error: {str(e)}"}), 500
 
 @app.route("/callback")
 def callback():
-    # إذا كنت تستخدم OAuth، أضف هنا التعامل مع code، لكن حاليًا فقط OK
     code = request.args.get('code')
     if code:
-        # مثال: احفظ أو تبادل بـ access_token (أضف كود إذا لزم)
         return jsonify({"message": "Callback received", "code": code}), 200
     return "OK", 200
 
