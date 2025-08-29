@@ -34,11 +34,9 @@ def sign_request(params):
 def extract_product_id(url):
     """Extract product_id from AliExpress URL"""
     try:
-        # Resolve shortened URLs
         response = requests.get(url, allow_redirects=True, timeout=10)
         final_url = response.url
         logger.debug(f"Resolved URL: {final_url}")
-        # Extract product_id (e.g., 123 from /item/123.html)
         match = re.search(r'item/(\d+)\.html', final_url)
         if match:
             product_id = match.group(1)
@@ -60,15 +58,19 @@ def deal():
     
     if not APP_KEY or not APP_SECRET:
         logger.error("APP_KEY or APP_SECRET not set")
-        return jsonify({"error": "APP_KEY or APP_SECRET not set"}), 500
+        return jsonify({
+            "error": "Configuration error: Please set APP_KEY and APP_SECRET in Render environment variables.",
+            "help": "Visit https://developers.aliexpress.com/ to get valid App Key and Secret."
+        }), 500
     
-    # Extract product_id
     product_id = extract_product_id(query)
     if not product_id:
         logger.error("Invalid product URL or unable to extract product_id")
-        return jsonify({"error": "Invalid product URL or unable to extract product_id"}), 400
+        return jsonify({
+            "error": "Invalid product URL or unable to extract product_id.",
+            "help": "Use a valid AliExpress product link, e.g., https://www.aliexpress.com/item/1005006860824860.html"
+        }), 400
     
-    # API parameters
     params = {
         "method": "aliexpress.affiliate.productdetail.get",
         "app_key": APP_KEY,
@@ -82,7 +84,6 @@ def deal():
         "tracking_id": TRACKING_ID if TRACKING_ID else "",
     }
     
-    # Generate signature and send request
     try:
         params["sign"] = sign_request(params)
         logger.debug(f"API request params: {params}")
@@ -91,20 +92,21 @@ def deal():
         data = response.json()
         logger.debug(f"API response: {data}")
         
-        # Check for API errors
         if "error_response" in data:
-            logger.error(f"API error: {data['error_response']}")
-            return jsonify({"error": data["error_response"]}), 500
+            error_msg = data["error_response"]
+            logger.error(f"API error: {error_msg}")
+            return jsonify({
+                "error": f"API error: {error_msg.get('msg', 'Unknown error')}",
+                "details": error_msg,
+                "help": "Verify APP_KEY and APP_SECRET in AliExpress Developer Console. If the issue persists, contact AliExpress support."
+            }), 500
         
-        # Extract product details
         product_data = data.get("aliexpress_affiliate_productdetail_get_response", {}).get("resp_result", {}).get("result", {}).get("products", {}).get("product", [])
         if not product_data:
             logger.error("No product found in API response")
-            return jsonify({"error": "No product found"}), 404
+            return jsonify({"error": "No product found for the given product_id."}), 404
         
         product = product_data[0]
-        
-        # Generate affiliate links for different discount types
         base_link = product.get("promotion_link", query)
         discount_links = {
             "coins": f"{base_link}&type=coins",
@@ -114,12 +116,12 @@ def deal():
             "bundles": f"{base_link}&type=bundles",
         }
         
-        # Response
         result = {
             "message": "🛍️ معلومات عن المنتج مع روابط التخفيضات 🛍️",
             "note": "⚠️ ملاحظة مهمة: السعر التخفيض بالعملات في بعض الأحيان غير مضبوط، تأكد من السعر النهائي في صفحة الدفع.",
             "sales_count": product.get("sale_orders", "غير متوفر"),
             "rating": product.get("average_star", "غير متوفر"),
+            "product_title": product.get("subject", "غير متوفر"),
             "discount_links": [
                 {"type": "تخفيض بالعملات", "link": discount_links["coins"]},
                 {"type": "عرض سوبر ديل", "link": discount_links["superdeals"]},
@@ -134,17 +136,23 @@ def deal():
     
     except requests.RequestException as e:
         logger.error(f"API request failed: {str(e)}")
-        return jsonify({"error": f"API request failed: {str(e)}"}), 500
+        return jsonify({
+            "error": f"API request failed: {str(e)}",
+            "help": "Check network connectivity or try again later."
+        }), 500
     except Exception as e:
         logger.error(f"Server error: {str(e)}")
-        return jsonify({"error": f"Server error: {str(e)}"}), 500
+        return jsonify({
+            "error": f"Server error: {str(e)}",
+            "help": "Contact support or check server logs."
+        }), 500
 
 @app.route("/callback")
 def callback():
-    code = request.args.get('code')
-    logger.info(f"Callback received with code: {code}")
-    if code:
-        return jsonify({"message": "Callback received", "code": code}), 200
+    params = request.args.to_dict()
+    logger.info(f"Callback received with params: {params}")
+    if 'code' in params:
+        return jsonify({"message": "Callback received", "params": params}), 200
     return "OK", 200
 
 if __name__ == "__main__":
