@@ -6,6 +6,7 @@ import os
 import re
 import logging
 from urllib.parse import urlencode
+from datetime import datetime
 
 app = Flask(__name__)
 
@@ -16,7 +17,7 @@ logger = logging.getLogger(__name__)
 # Environment variables
 APP_KEY = os.environ.get('APP_KEY')
 APP_SECRET = os.environ.get('APP_SECRET')
-TRACKING_ID = os.environ.get('TRACKING_ID')
+TRACKING_ID = os.environ.get('TRACKING_ID', 'slotxo24')
 
 API_URL = "https://gw.api.taobao.com/router/rest"
 
@@ -29,7 +30,7 @@ def sign_request(params):
     # 1. Sort parameters alphabetically by their key
     sorted_params = sorted(params.items(), key=lambda x: x[0])
     
-    # 2. CORRECTION: Create a query string with 'key=value' joined by '&'
+    # 2. Create a query string with 'key=value' joined by '&'
     sorted_query_string = '&'.join([f"{k}={v}" for k, v in sorted_params])
     
     # 3. Prepend and append the APP_SECRET
@@ -44,14 +45,24 @@ def sign_request(params):
 def extract_product_id(url):
     """Extract product_id from AliExpress URL"""
     try:
+        # إذا كان الرابط مباشرًا يحتوي على product_id
+        direct_match = re.search(r'/(\d+)\.html', url)
+        if direct_match:
+            product_id = direct_match.group(1)
+            logger.debug(f"Direct extracted product_id: {product_id}")
+            return product_id
+        
+        # إذا كان رابطًا قصيرًا، نحتاج إلى حل التوجيه
         response = requests.get(url, allow_redirects=True, timeout=10)
         final_url = response.url
         logger.debug(f"Resolved URL: {final_url}")
-        match = re.search(r'item/(\d+)\.html', final_url)
+        
+        match = re.search(r'/(\d+)\.html', final_url)
         if match:
             product_id = match.group(1)
             logger.debug(f"Extracted product_id: {product_id}")
             return product_id
+        
         logger.error(f"No product_id found in URL: {final_url}")
         return None
     except requests.RequestException as e:
@@ -63,23 +74,34 @@ def extract_product_id(url):
 
 @app.route("/")
 def deal():
-    query = request.args.get("query", "https://s.click.aliexpress.com/e/_EG3MC4q")
+    query = request.args.get("query", "").strip()
     logger.info(f"Received query: {query}")
+    
+    if not query:
+        return jsonify({
+            "error": "Query parameter is required",
+            "help": "Add ?query=product_name or ?query=product_url to your request"
+        }), 400
     
     if not APP_KEY or not APP_SECRET:
         logger.error("APP_KEY or APP_SECRET not set")
         return jsonify({
-            "error": "Configuration error: Please set APP_KEY and APP_SECRET in Render environment variables.",
+            "error": "Configuration error: Please set APP_KEY and APP_SECRET in environment variables.",
             "help": "Visit https://developers.aliexpress.com/ to get valid App Key and Secret."
         }), 500
     
-    product_id = extract_product_id(query)
-    if not product_id:
-        logger.error("Invalid product URL or unable to extract product_id")
-        return jsonify({
-            "error": "Invalid product URL or unable to extract product_id.",
-            "help": "Use a valid AliExpress product link, e.g., https://www.aliexpress.com/item/1005006860824860.html"
-        }), 400
+    # تحديد ما إذا كان الاستعلام عبارة عن رابط أو اسم منتج
+    if query.startswith(('http://', 'https://', 'www.', 'aliexpress.com', 's.click.aliexpress.com')):
+        # استخراج product_id من الرابط
+        product_id = extract_product_id(query)
+        if not product_id:
+            return jsonify({
+                "error": "Invalid product URL or unable to extract product_id.",
+                "help": "Use a valid AliExpress product link"
+            }), 400
+    else:
+        # البحث بالاسم - نستخدم الاستعلام مباشرة
+        product_id = query
     
     params = {
         "method": "aliexpress.affiliate.productdetail.get",
@@ -91,15 +113,15 @@ def deal():
         "product_ids": product_id,
         "target_currency": "USD",
         "target_language": "EN",
-        "tracking_id": TRACKING_ID if TRACKING_ID else "",
+        "tracking_id": TRACKING_ID,
     }
     
     try:
         params["sign"] = sign_request(params)
         logger.debug(f"API request params: {params}")
         
-        # استخدام اتصال مباشر بدون إعادة محاولة تلقائية
-        response = requests.post(API_URL, data=params, timeout=10)
+        # استخدام اتصال مباشر مع timeout مناسب
+        response = requests.post(API_URL, data=params, timeout=15)
         response.raise_for_status()
         data = response.json()
         logger.debug(f"API response: {data}")
@@ -110,48 +132,47 @@ def deal():
             return jsonify({
                 "error": f"API error: {error_msg.get('msg', 'Unknown error')}",
                 "details": error_msg,
-                "help": "Verify APP_KEY and APP_SECRET in AliExpress Developer Console. If the issue persists, contact AliExpress support."
+                "help": "Verify APP_KEY and APP_SECRET in AliExpress Developer Console."
             }), 500
         
-        product_data = data.get("aliexpress_affiliate_productdetail_get_response", {}).get("resp_result", {}).get("result", {}).get("products", {}).get("product", [])
+        product_data = data.get("aliexpress_affiliate_productdetail_get_response", {})
+        product_data = product_data.get("resp_result", {}).get("result", {}).get("products", {}).get("product", [])
+        
         if not product_data:
             logger.error("No product found in API response")
-            return jsonify({"error": "No product found for the given product_id."}), 404
+            return jsonify({"error": "No product found for the given query."}), 404
         
-        product = product_data[0]
-        base_link = product.get("promotion_link", query)
-        discount_links = {
-            "coins": f"{base_link}&type=coins",
-            "superdeals": f"{base_link}&type=superdeals",
-            "limited_offer": f"{base_link}&type=limited",
-            "bigsave": f"{base_link}&type=bigsave",
-            "bundles": f"{base_link}&type=bundles",
-        }
+        product = product_data[0] if isinstance(product_data, list) else product_data
         
+        # استخراج البيانات المطلوبة للواجهة الأمامية
+        base_link = product.get("promotion_link", "")
+        product_url = product.get("product_url", "")
+        
+        # معالجة البيانات للواجهة الأمامية
         result = {
-            "message": "🛍️ معلومات عن المنتج مع روابط التخفيضات 🛍️",
-            "note": "⚠️ ملاحظة مهمة: السعر التخفيض بالعملات في بعض الأحيان غير مضبوط، تأكد من السعر النهائي في صفحة الدفع.",
-            "sales_count": product.get("sale_orders", "غير متوفر"),
-            "rating": product.get("average_star", "غير متوفر"),
-            "product_title": product.get("subject", "غير متوفر"),
-            "discount_links": [
-                {"type": "تخفيض بالعملات", "link": discount_links["coins"]},
-                {"type": "عرض سوبر ديل", "link": discount_links["superdeals"]},
-                {"type": "عرض محدود", "link": discount_links["limited_offer"]},
-                {"type": "تخفيض بيج سيف", "link": discount_links["bigsave"]},
-                {"type": "عرض الحزمات", "link": discount_links["bundles"]},
-            ]
+            "title": product.get("subject", "غير متوفر"),
+            "image_url": product.get("main_image", ""),
+            "original_price": product.get("original_price", ""),
+            "price_after": product.get("target_sale_price", ""),
+            "coupon_code": product.get("promotion_code", "لا يتطلب كوبون"),
+            "affiliate_link": base_link,
+            "product_url": product_url,
+            "discount": product.get("discount", ""),
+            "rating": product.get("evaluate_rate", "غير متوفر"),
+            "orders": product.get("lastest_volume", "غير متوفر"),
+            "shipping": "شحن مجاني" if product.get("free_shipping", False) else "رسوم شحن",
+            "store_name": product.get("store_name", "غير متوفر"),
+            "timestamp": datetime.now().isoformat()
         }
         
         logger.info("Returning successful response")
         return jsonify(result)
     
     except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
-        # هذا خطأ اتصال دائم (على الأرجح بسبب حظر Render من قبل AliExpress)
         logger.error(f"Permanent connection failure to API: {str(e)}")
         return jsonify({
-            "error": "Cannot connect to the product information service. This appears to be a network block from your hosting provider.",
-            "help": "Try deploying to a different platform like Heroku, or contact your hosting provider's support about connectivity issues to gw.api.taobao.com",
+            "error": "Cannot connect to the product information service.",
+            "help": "This might be a temporary issue with the AliExpress API. Please try again later.",
             "details": str(e)
         }), 503
     
@@ -169,13 +190,14 @@ def deal():
             "help": "Contact support or check server logs."
         }), 500
 
-@app.route("/callback")
-def callback():
-    params = request.args.to_dict()
-    logger.info(f"Callback received with params: {params}")
-    if 'code' in params:
-        return jsonify({"message": "Callback received", "params": params}), 200
-    return "OK", 200
+@app.route("/health")
+def health_check():
+    """Endpoint for health checks"""
+    return jsonify({"status": "healthy", "timestamp": datetime.now().isoformat()})
+
+@app.errorhandler(404)
+def not_found(error):
+    return jsonify({"error": "Endpoint not found"}), 404
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)), debug=os.environ.get("DEBUG", False))
