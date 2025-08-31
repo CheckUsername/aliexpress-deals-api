@@ -1,6 +1,20 @@
-FROM python:3.10-slim
+# استخدام صورة أساسية خفيفة الوزن
+FROM python:3.9-slim
+
+# تعيين مجرف العمل
 WORKDIR /app
+
+# نسخ ملف المتطلبات أولا للاستفادة من caching في Docker
 COPY requirements.txt .
-RUN pip install -r requirements.txt
+
+# تثبيت المتطلبات
+RUN pip install --no-cache-dir -r requirements.txt
+
+# نسخ باقي الملفات
 COPY . .
-CMD ["gunicorn", "--bind", "0.0.0.0:$PORT", "app:app"]
+
+# فتح المنفذ الذي يعمل عليه التطبيق
+EXPOSE 10000
+
+# تشغيل التطبيق
+CMD ["python", "app.py"]
