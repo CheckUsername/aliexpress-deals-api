@@ -6,8 +6,6 @@ import os
 import re
 import logging
 from urllib.parse import urlencode
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 
 app = Flask(__name__)
 
@@ -21,18 +19,6 @@ APP_SECRET = os.environ.get('APP_SECRET')
 TRACKING_ID = os.environ.get('TRACKING_ID')
 
 API_URL = "https://gw.api.taobao.com/router/rest"
-
-# Create a session with retry strategy
-session = requests.Session()
-retry_strategy = Retry(
-    total=3,
-    status_forcelist=[429, 500, 502, 503, 504],
-    allowed_methods=["POST"],
-    backoff_factor=1
-)
-adapter = HTTPAdapter(max_retries=retry_strategy)
-session.mount("https://", adapter)
-session.mount("http://", adapter)
 
 def sign_request(params):
     """Generate MD5 signature for AliExpress API according to official docs"""
@@ -111,8 +97,9 @@ def deal():
     try:
         params["sign"] = sign_request(params)
         logger.debug(f"API request params: {params}")
-        # Use the session with retry strategy and increased timeout
-        response = session.post(API_URL, data=params, timeout=60)
+        
+        # استخدام اتصال مباشر بدون إعادة محاولة تلقائية
+        response = requests.post(API_URL, data=params, timeout=10)
         response.raise_for_status()
         data = response.json()
         logger.debug(f"API response: {data}")
@@ -159,12 +146,22 @@ def deal():
         logger.info("Returning successful response")
         return jsonify(result)
     
+    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+        # هذا خطأ اتصال دائم (على الأرجح بسبب حظر Render من قبل AliExpress)
+        logger.error(f"Permanent connection failure to API: {str(e)}")
+        return jsonify({
+            "error": "Cannot connect to the product information service. This appears to be a network block from your hosting provider.",
+            "help": "Try deploying to a different platform like Heroku, or contact your hosting provider's support about connectivity issues to gw.api.taobao.com",
+            "details": str(e)
+        }), 503
+    
     except requests.RequestException as e:
         logger.error(f"API request failed: {str(e)}")
         return jsonify({
             "error": f"API request failed: {str(e)}",
             "help": "Check network connectivity or try again later."
         }), 500
+    
     except Exception as e:
         logger.error(f"Server error: {str(e)}")
         return jsonify({
