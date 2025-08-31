@@ -5,7 +5,6 @@ import time
 import os
 import re
 import logging
-from urllib.parse import urlencode
 from datetime import datetime
 
 app = Flask(__name__)
@@ -22,7 +21,7 @@ TRACKING_ID = os.environ.get('TRACKING_ID', 'slotxo24')
 API_URL = "https://gw.api.taobao.com/router/rest"
 
 def sign_request(params):
-    """Generate MD5 signature for AliExpress API according to official docs"""
+    """Generate MD5 signature for AliExpress API"""
     if not APP_SECRET:
         logger.error("APP_SECRET is not set")
         raise ValueError("APP_SECRET is not set")
@@ -73,21 +72,32 @@ def extract_product_id(url):
         return None
 
 @app.route("/")
+def home():
+    """Home page with usage instructions"""
+    return jsonify({
+        "message": "مرحبًا بك في AliExpress Deals API",
+        "usage": "استخدم /deal?query=رابط_المنتج أو /deal?query=اسم_المنتج",
+        "example": "مثال: /deal?query=https://s.click.aliexpress.com/e/EXAMPLE"
+    })
+
+@app.route("/deal")
 def deal():
     query = request.args.get("query", "").strip()
-    logger.info(f"Received query: {query}")
     
     if not query:
         return jsonify({
-            "error": "Query parameter is required",
-            "help": "Add ?query=product_name or ?query=product_url to your request"
+            "error": "معامل query مطلوب",
+            "help": "أضف ?query=اسم_المنتج أو ?query=رابط_المنتج إلى الطلب",
+            "example": "/deal?query=https://s.click.aliexpress.com/e/EXAMPLE"
         }), 400
+    
+    logger.info(f"Received query: {query}")
     
     if not APP_KEY or not APP_SECRET:
         logger.error("APP_KEY or APP_SECRET not set")
         return jsonify({
-            "error": "Configuration error: Please set APP_KEY and APP_SECRET in environment variables.",
-            "help": "Visit https://developers.aliexpress.com/ to get valid App Key and Secret."
+            "error": "خطأ في الإعدادات: يرجى تعيين APP_KEY و APP_SECRET في متغيرات البيئة.",
+            "help": "زر https://developers.aliexpress.com/ للحصول على مفتاح تطبيق وسري صالحين."
         }), 500
     
     # تحديد ما إذا كان الاستعلام عبارة عن رابط أو اسم منتج
@@ -96,8 +106,8 @@ def deal():
         product_id = extract_product_id(query)
         if not product_id:
             return jsonify({
-                "error": "Invalid product URL or unable to extract product_id.",
-                "help": "Use a valid AliExpress product link"
+                "error": "رابط منتج غير صالح أو تعذر استخراج product_id.",
+                "help": "استخدم رابط منتج AliExpress صالح"
             }), 400
     else:
         # البحث بالاسم - نستخدم الاستعلام مباشرة
@@ -130,9 +140,9 @@ def deal():
             error_msg = data["error_response"]
             logger.error(f"API error: {error_msg}")
             return jsonify({
-                "error": f"API error: {error_msg.get('msg', 'Unknown error')}",
+                "error": f"خطأ في API: {error_msg.get('msg', 'خطأ غير معروف')}",
                 "details": error_msg,
-                "help": "Verify APP_KEY and APP_SECRET in AliExpress Developer Console."
+                "help": "تحقق من APP_KEY و APP_SECRET في وحدة تحكم مطوري AliExpress."
             }), 500
         
         product_data = data.get("aliexpress_affiliate_productdetail_get_response", {})
@@ -140,7 +150,7 @@ def deal():
         
         if not product_data:
             logger.error("No product found in API response")
-            return jsonify({"error": "No product found for the given query."}), 404
+            return jsonify({"error": "لم يتم العثور على منتج لـ query المحدد."}), 404
         
         product = product_data[0] if isinstance(product_data, list) else product_data
         
@@ -171,29 +181,79 @@ def deal():
     except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
         logger.error(f"Permanent connection failure to API: {str(e)}")
         return jsonify({
-            "error": "Cannot connect to the product information service.",
-            "help": "This might be a temporary issue with the AliExpress API. Please try again later.",
+            "error": "لا يمكن الاتصال بخدمة معلومات المنتج.",
+            "help": "قد تكون هذه مشكلة مؤقتة مع AliExpress API. يرجى المحاولة مرة أخرى لاحقًا.",
             "details": str(e)
         }), 503
     
     except requests.RequestException as e:
         logger.error(f"API request failed: {str(e)}")
         return jsonify({
-            "error": f"API request failed: {str(e)}",
-            "help": "Check network connectivity or try again later."
+            "error": f"فشل طلب API: {str(e)}",
+            "help": "تحقق من اتصال الشبكة أو حاول مرة أخرى لاحقًا."
         }), 500
     
     except Exception as e:
         logger.error(f"Server error: {str(e)}")
         return jsonify({
-            "error": f"Server error: {str(e)}",
-            "help": "Contact support or check server logs."
+            "error": f"خطأ في الخادم: {str(e)}",
+            "help": "اتصل بالدعم أو تحقق من سجلات الخادم."
+        }), 500
+
+@app.route("/callback", methods=['GET', 'POST'])
+def callback():
+    """Callback endpoint for AliExpress API verification"""
+    try:
+        if request.method == 'GET':
+            # AliExpress يرسل طلب التحقق عبر GET
+            params = request.args.to_dict()
+            logger.info(f"Callback verification request: {params}")
+            
+            # AliExpress يتوقع ردًا بنفس المعلمة التي أرسلها
+            if 'code' in params:
+                return jsonify({
+                    "code": 0,
+                    "msg": "success",
+                    "verified": True,
+                    "timestamp": datetime.now().isoformat()
+                }), 200
+            else:
+                return jsonify({
+                    "code": 0,
+                    "msg": "success",
+                    "message": "Callback verification endpoint is active",
+                    "timestamp": datetime.now().isoformat()
+                }), 200
+        
+        elif request.method == 'POST':
+            # معالجة بيانات callback الفعلية من AliExpress
+            data = request.get_json()
+            logger.info(f"Callback data received: {data}")
+            
+            # معالجة البيانات حسب احتياجاتك
+            return jsonify({
+                "code": 0,
+                "msg": "success",
+                "received": True,
+                "timestamp": datetime.now().isoformat()
+            }), 200
+            
+    except Exception as e:
+        logger.error(f"Callback error: {str(e)}")
+        return jsonify({
+            "code": 500,
+            "msg": "error",
+            "error": str(e)
         }), 500
 
 @app.route("/health")
 def health_check():
     """Endpoint for health checks"""
-    return jsonify({"status": "healthy", "timestamp": datetime.now().isoformat()})
+    return jsonify({
+        "status": "healthy", 
+        "timestamp": datetime.now().isoformat(),
+        "service": "AliExpress Deals API"
+    })
 
 @app.errorhandler(404)
 def not_found(error):
