@@ -1,3 +1,7 @@
+
+## 4. ملف `app.py` المصحح
+
+```python
 from flask import Flask, request, jsonify
 import requests
 import hashlib
@@ -5,6 +9,7 @@ import time
 import os
 import re
 import logging
+from urllib.parse import urlencode
 
 app = Flask(__name__)
 
@@ -17,16 +22,25 @@ APP_KEY = os.environ.get('APP_KEY')
 APP_SECRET = os.environ.get('APP_SECRET')
 TRACKING_ID = os.environ.get('TRACKING_ID')
 
-API_URL = "http://gw.api.taobao.com/router/rest"
+API_URL = "https://gw.api.taobao.com/router/rest"
 
 def sign_request(params):
-    """Generate MD5 signature for AliExpress API"""
+    """Generate MD5 signature for AliExpress API according to official docs"""
     if not APP_SECRET:
         logger.error("APP_SECRET is not set")
         raise ValueError("APP_SECRET is not set")
+    
+    # 1. Sort parameters alphabetically by their key
     sorted_params = sorted(params.items(), key=lambda x: x[0])
-    sorted_string = ''.join([f"{k}{v}" for k, v in sorted_params])
-    bookend_string = APP_SECRET + sorted_string + APP_SECRET
+    
+    # 2. CORRECTION: Create a query string with 'key=value' joined by '&'
+    sorted_query_string = '&'.join([f"{k}={v}" for k, v in sorted_params])
+    
+    # 3. Prepend and append the APP_SECRET
+    bookend_string = APP_SECRET + sorted_query_string + APP_SECRET
+    logger.debug(f"String to sign: {bookend_string}")
+    
+    # 4. Generate MD5 hash and convert to uppercase
     sign = hashlib.md5(bookend_string.encode('utf-8')).hexdigest().upper()
     logger.debug(f"Generated signature: {sign}")
     return sign
