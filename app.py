@@ -6,6 +6,8 @@ import os
 import re
 import logging
 from urllib.parse import urlencode
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 app = Flask(__name__)
 
@@ -19,6 +21,18 @@ APP_SECRET = os.environ.get('APP_SECRET')
 TRACKING_ID = os.environ.get('TRACKING_ID')
 
 API_URL = "https://gw.api.taobao.com/router/rest"
+
+# Create a session with retry strategy
+session = requests.Session()
+retry_strategy = Retry(
+    total=3,
+    status_forcelist=[429, 500, 502, 503, 504],
+    allowed_methods=["POST"],
+    backoff_factor=1
+)
+adapter = HTTPAdapter(max_retries=retry_strategy)
+session.mount("https://", adapter)
+session.mount("http://", adapter)
 
 def sign_request(params):
     """Generate MD5 signature for AliExpress API according to official docs"""
@@ -97,7 +111,8 @@ def deal():
     try:
         params["sign"] = sign_request(params)
         logger.debug(f"API request params: {params}")
-        response = requests.post(API_URL, data=params, timeout=15)
+        # Use the session with retry strategy and increased timeout
+        response = session.post(API_URL, data=params, timeout=60)
         response.raise_for_status()
         data = response.json()
         logger.debug(f"API response: {data}")
