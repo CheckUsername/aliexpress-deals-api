@@ -1,7 +1,3 @@
-
-## 4. ملف `app.py` المصحح
-
-```python
 from flask import Flask, request, jsonify
 import requests
 import hashlib
