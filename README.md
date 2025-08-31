@@ -1,15 +1,16 @@
 # AliExpress Deals API
-خدمة سحابية تستخرج معلومات المنتج وروابط التخفيضات من AliExpress باستخدام Affiliate API.
 
-## المميزات
-- استخراج عنوان المنتج، عدد المبيعات، والتقييم.
-- إنشاء روابط تابعة (affiliate links) لأنواع التخفيضات (عملات، Superdeals، عرض محدود، Bigsave، حزمات).
-- النشر على Render.com باستخدام Docker و Gunicorn.
+واجهة برمجة تطبيقات لاستخراج معلومات المنتجات وعروض التخفيضات من AliExpress.
 
 ## المتطلبات
-- **App Key و App Secret**: احصل عليهما من AliExpress Developer Console (https://developers.aliexpress.com/).
-- **Tracking ID**: احصل عليه من Affiliate Portal (https://portals.aliexpress.com/) (اختياري).
-- **Python 3.10+** و Docker للتشغيل أو النشر.
 
-## إعداد المتغيرات البيئية
-1. أنشئ ملف `.env` محليًا (لا ترفعه إلى GitHub):
+- Python 3.9 أو أعلى
+- حساب في [برنامج AliExpress Affiliate](https://affiliate.aliexpress.com/)
+- مفاتيح API من [منصة مطوري AliExpress](https://developers.aliexpress.com/)
+
+## التنصيب
+
+1. استنسخ المستودع:
+```bash
+git clone <رابط المستودع>
+cd aliexpress-deals-api
