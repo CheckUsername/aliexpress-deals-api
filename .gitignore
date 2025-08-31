@@ -1,3 +1,48 @@
+# البيئات الافتراضية
 .env
-__pycache__/
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# ملفات بيئة Python
 *.pyc
+__pycache__/
+*.pyo
+*.pyd
+.Python
+
+# بيئات Conda
+.env
+.conda_envs/
+
+# إعدادات IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ملفات النظام
+.DS_Store
+Thumbs.db
+
+# ملفات السجلات
+*.log
+logs/
+
+# ملفات الاعتماد
+credentials.json
+secrets.json
+app_key.txt
+app_secret.txt
+
+# ملفات النظام التشغيلي
+*.so
+*.dylib
+
+# ملفات التثبيت
+build/
+dist/
+*.egg-info/
